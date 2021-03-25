@@ -1,0 +1,54 @@
+#services:
+#  - docker:stable
+stages:
+  - compile
+  - build
+  - deploy
+variables:
+  MAVEN_OPTS: "-Dhttps.protocols=TLSv1.2 -Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository -Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=WARN -Dorg.slf4j.simpleLogger.showDateTime=true -Djava.awt.headless=true"
+  MAVEN_CLI_OPTS: "--batch-mode --errors --fail-at-end --show-version -DinstallAtEnd=true -DdeployAtEnd=true"
+  #DOCKER_HOST: "tcp://docker:2375"
+  #DOCKER_DRIVER: overlay2
+  REGISTRY_URL: ${CI_REGISTRY}/${CI_REGISTRY_NAME}/dni-poc/spring-service-example
+  DOCKER_BUILD_ID: ${CI_COMMIT_REF_NAME}_${CI_COMMIT_SHORT_SHA}
+maven-build:
+  only:
+    - master
+  image: maven:3-jdk-8
+  stage: compile
+  tags:
+    - docker
+  script: "mvn package -B"
+  artifacts:
+    paths:
+      - target/*.jar
+
+build_image:
+  stage: build
+  script:
+    - docker login ${CI_REGISTRY} -u ${CI_REGISTRY_USER} -p ${CI_REGISTRY_PWD}
+    - docker build -t ${REGISTRY_URL}:${DOCKER_BUILD_ID} .
+    - docker push ${REGISTRY_URL}:${DOCKER_BUILD_ID}
+    - docker tag ${REGISTRY_URL}:${DOCKER_BUILD_ID} ${REGISTRY_URL}:latest
+    - docker push ${REGISTRY_URL}:latest
+  only:
+    - master
+  tags:
+    - shell
+
+deploy_to_stage:
+  stage: deploy
+  tags:
+    - docker
+  when: manual
+  before_script:
+    - curl -LO https://storage.googleapis.com/kubernetes-release/release/`curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt`/bin/linux/amd64/kubectl
+    - chmod +x ./kubectl
+    - mv ./kubectl /usr/local/bin/kubectl
+    - kubectl version --client
+    - mkdir -p $HOME/.kube && cp $KUBE_CONFIG_FILE "$HOME/.kube/config"
+  script:
+    - >
+      kubectl set image deployment hello-kubernetes-deployment
+      hello-kubernetes=${REGISTRY_URL}:${DOCKER_BUILD_ID}
+      --record
